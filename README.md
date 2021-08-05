@@ -9,9 +9,13 @@ This repository contains the summarized code for the patient's limitations using
 Order of execution
 
 **1.** Execute the FeatureProcessor.ipynb
+
 **2.** Run the BorutaFeatureSelection.Rmd
+
 **3.** Filter manually the data using a jupyter notebook using the Boruta's selected feature
+
 **4.** Use AutoML, the jupyter notebooks are a guide
+
 **5.** Run the CPET_ModelAnalysis.ipynb to execute the models
 
 ## Important files
