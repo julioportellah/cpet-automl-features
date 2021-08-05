@@ -1,0 +1,379 @@
+---
+
+title: "Untitled"
+author: "Julio Portella"
+date: "6/3/2021"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+## Importing R libraries
+
+Importing the libraries
+
+```{r cars}
+library(dplyr)
+library(caret)
+library(Boruta)
+library(randomForest)
+library(glmnet)
+library(randomForestExplainer)
+library(rfFC)
+library(ROCR)
+library(precrec)
+library(precrec)
+library(ROSE)
+library(ALEPlot)
+```
+
+## Loading the data
+
+Load the data 
+```{r}
+library(dplyr)
+source_CPET <- read.csv("C:/Users/julio/Projects/HealthInformatics/health-informatics-capstone/jp-post-capstone/data/8_min_data_updated_corrected.csv", header=TRUE, sep=",")
+#source_CPET <-source_CPET %>% select(-c(X, PatientId,SessionId , sex, age,BMI,HasAnaerobicThresholdMean, PredictedMaxHR))
+source_CPET <-source_CPET %>% select(-c(X, PatientId,SessionId , sex, age,BMI))
+```
+Finding more data
+Scaling the data
+```{r}
+#dat2 <- source_CPET %>% mutate_at(-c("CardiacLim ", "PulmonaryLim","MuscleSkeletalLim"), ~(scale(.) %>% as.vector))
+dat2 <- source_CPET %>% mutate_at(c('MaxVO2_EST',
+       'MaxO2_EST', 'PredictedMaxHR', 'CardiacLim', 'PulmonaryLim',
+       'MuscleSkeletalLim', 'Healthy', 'PeakHeartRate', 'MeanHeartRate',
+       'MinHeartRate', 'StdHeartRate', 'LowestVE.VCO2', 'PeakVE.VCO2',
+       'MeanVE.VCO2', 'StdVE.VCO2', 'PeakVO2Real', 'DiffPeakVO2', 'DiffPeakHR',
+       'DiffPercentPeakVO2', 'DiffPercentPeakHR', 'MeanRER', 'PeakRER',
+       'LowestRER', 'MeanVE', 'PeakVE', 'LowestVE', 'MeanRR', 'PeakRR',
+       'LowestRR', 'MeanVO2', 'PeakVO2', 'LowestVO2', 'MeanVCO2', 'PeakVCO2',
+       'LowestVCO2', 'HRvsVO2Slope', 'VEvsVCO2Slope', 'MeanO2Pulse',
+       'MaxO2Pulse', 'MinO2Pulse', 'StdO2Pulse', 'O2PulseDiff',
+       'O2PulsePercent', 'first_half_VO2Slope', 'first_half_HRSlope',
+       'first_half_VCO2Slope', 'first_half_VESlope', 'first_half_RERSlope',
+       'first_half_RRSlope', 'first_half_O2Slope', 'first_half_VEVCO2Slope',
+       'first_half_VEVO2Slope', 'second_half_VO2Slope', 'second_half_HRSlope',
+       'second_half_VCO2Slope', 'second_half_VESlope', 'second_half_RERSlope',
+       'second_half_RRSlope', 'second_half_O2Slope', 'second_half_VEVCO2Slope',
+       'second_half_VEVO2Slope', 'X15_to_85_VO2Slope', 'X15_to_85_HRSlope',
+       'X15_to_85_VCO2Slope', 'X15_to_85_VESlope', 'X15_to_85_RERSlope',
+       'X15_to_85_RRSlope', 'X15_to_85_O2Slope', 'X15_to_85_VEVCO2Slope',
+       'X15_to_85_VEVO2Slope', 'VTTime', 'VO2atVT', 'PercentTimeAfterVT',
+       'VO2vsPeakVO2atVT'), ~(scale(.) %>% as.vector))
+```
+Selecting the cardiac limitation data with the random split
+```{r}
+cardiac_lim_data <-dat2 %>% select(-c(PulmonaryLim,MuscleSkeletalLim,Healthy))
+sample_size = floor(0.8*nrow(cardiac_lim_data))
+set.seed(2345)
+picked = sample(seq_len(nrow(cardiac_lim_data)),size = sample_size)
+train_data =cardiac_lim_data[picked,]
+test_data =cardiac_lim_data[-picked,]
+```
+
+Using boruta for feature selection FOR THE CARDIAC LIMITATION
+```{r}
+boruta.train <- Boruta(CardiacLim~., data = cardiac_lim_data, doTrace = 2)
+```
+
+```{r}
+boruta.train
+```
+
+
+```{r}
+plot(boruta.train, xlab = "", xaxt = "n", type='l')
+lz<-lapply(1:ncol(boruta.train$ImpHistory),function(i)
+boruta.train$ImpHistory[is.finite(boruta.train$ImpHistory[,i]),i])
+names(lz) <- colnames(boruta.train$ImpHistory)
+Labels <- sort(sapply(lz,median))
+axis(side = 1,las=2,labels = names(Labels),
+at = 1:ncol(boruta.train$ImpHistory), cex.axis = 0.5)
+#text(cex = 0.9)
+#text(x = 1:length(boruta.train), y = par("usr")[3] - 2.5, labels = names(Labels), srt = 35, cex = 0.8, xpd = NA)
+```
+Picking only the confirmed
+```{r}
+boruta.df.chosen <- attStats(boruta.train)
+boruta.df.chosen %>% filter(decision == 'Confirmed') %>% arrange(desc(meanImp))
+```
+
+Picking tentative features into important features
+```{r}
+final.boruta <- TentativeRoughFix(boruta.train)
+print(final.boruta)
+getSelectedAttributes(final.boruta, withTentative = F)
+```
+
+
+```{r}
+boruta.df <- attStats(final.boruta)
+class(boruta.df)
+print(boruta.df)
+#starwars %>% filter(mass > mean(mass, na.rm = TRUE))
+boruta.df %>% filter(decision != 'Rejected') %>% arrange(desc(meanImp))
+boruta.chosen <- boruta.df %>% filter(decision != 'Rejected') %>% arrange(desc(meanImp))
+```
+## Pulmonary Limitation Model
+
+Selecting the pulmonary limitation data with the random split
+```{r}
+pulmonary_lim_data <-dat2 %>% select(-c(CardiacLim,MuscleSkeletalLim,Healthy))
+sample_size = floor(0.8*nrow(pulmonary_lim_data))
+set.seed(2345)
+picked = sample(seq_len(nrow(pulmonary_lim_data)),size = sample_size)
+pulm_train_data =pulmonary_lim_data[picked,]
+pulm_test_data =pulmonary_lim_data[-picked,]
+```
+
+Using boruta for feature selection FOR THE PULMONARY LIMITATION
+```{r}
+boruta.train <- Boruta(as.factor(PulmonaryLim)~., data = pulmonary_lim_data, doTrace = 2)
+```
+
+```{r}
+plot(boruta.train, xlab = "", xaxt = "n")
+lz<-lapply(1:ncol(boruta.train$ImpHistory),function(i)
+boruta.train$ImpHistory[is.finite(boruta.train$ImpHistory[,i]),i])
+names(lz) <- colnames(boruta.train$ImpHistory)
+Labels <- sort(sapply(lz,median))
+axis(side = 1,las=2,labels = names(Labels),
+at = 1:ncol(boruta.train$ImpHistory), cex.axis = 0.5)
+```
+
+```{r}
+boruta.df <- attStats(boruta.train)
+class(boruta.df)
+print(boruta.df)
+#starwars %>% filter(mass > mean(mass, na.rm = TRUE))
+boruta.df %>% filter(decision != 'Rejected') %>% arrange(desc(meanImp))
+
+```
+Picking tentative features into important features
+```{r}
+final.boruta <- TentativeRoughFix(boruta.train)
+print(final.boruta)
+getSelectedAttributes(final.boruta, withTentative = F)
+```
+
+
+```{r}
+boruta.df <- attStats(final.boruta)
+class(boruta.df)
+print(boruta.df)
+#starwars %>% filter(mass > mean(mass, na.rm = TRUE))
+boruta.df %>% filter(decision != 'Rejected') %>% arrange(desc(meanImp))
+
+```
+
+
+```{r}
+other_lim_data <-dat2 %>% select(-c(CardiacLim,PulmonaryLim,Healthy))
+sample_size = floor(0.8*nrow(other_lim_data))
+set.seed(2345)
+picked = sample(seq_len(nrow(other_lim_data)),size = sample_size)
+train_data =other_lim_data[picked,]
+test_data =other_lim_data[-picked,]
+```
+
+Using boruta for feature selection FOR THE CARDIAC LIMITATION
+```{r}
+boruta.train <- Boruta(MuscleSkeletalLim~., data = other_lim_data, doTrace = 2)
+```
+
+```{r}
+plot(boruta.train, xlab = "", xaxt = "n")
+lz<-lapply(1:ncol(boruta.train$ImpHistory),function(i)
+boruta.train$ImpHistory[is.finite(boruta.train$ImpHistory[,i]),i])
+names(lz) <- colnames(boruta.train$ImpHistory)
+Labels <- sort(sapply(lz,median))
+axis(side = 1,las=2,labels = names(Labels),
+at = 1:ncol(boruta.train$ImpHistory), cex.axis = 0.5)
+```
+
+```{r}
+boruta.df <- attStats(boruta.train)
+class(boruta.df)
+print(boruta.df)
+#starwars %>% filter(mass > mean(mass, na.rm = TRUE))
+boruta.df %>% filter(decision != 'Rejected') %>% arrange(desc(meanImp))
+
+```
+
+```{r}
+final.boruta <- TentativeRoughFix(boruta.train)
+print(final.boruta)
+getSelectedAttributes(final.boruta, withTentative = F)
+```
+
+
+```{r}
+boruta.df <- attStats(final.boruta)
+class(boruta.df)
+print(boruta.df)
+#starwars %>% filter(mass > mean(mass, na.rm = TRUE))
+boruta.df %>% filter(decision != 'Rejected') %>% arrange(desc(meanImp))
+
+```
+
+
+## Muscle Skeletal Limitation Model
+
+
+Selecting the pulmonary limitation data with the random split
+```{r}
+ms_lim_data <-dat2 %>% select(-c(CardiacLim,PulmonaryLim))
+sample_size = floor(0.8*nrow(ms_lim_data))
+set.seed(2345)
+picked = sample(seq_len(nrow(ms_lim_data)),size = sample_size)
+ms_train_data =ms_lim_data[picked,]
+ms_test_data =ms_lim_data[-picked,]
+```
+
+Using boruta for feature selection FOR THE MUSCLE SKELETAL LIMITATION
+```{r}
+boruta.train <- Boruta(as.factor(Condition)~., data = ms_lim_data, doTrace = 2)
+```
+
+
+```{r}
+plot(boruta.train, xlab = "", xaxt = "n")
+lz<-lapply(1:ncol(boruta.train$ImpHistory),function(i)
+boruta.train$ImpHistory[is.finite(boruta.train$ImpHistory[,i]),i])
+names(lz) <- colnames(boruta.train$ImpHistory)
+Labels <- sort(sapply(lz,median))
+axis(side = 1,las=2,labels = names(Labels),
+at = 1:ncol(boruta.train$ImpHistory), cex.axis = 0.5)
+```
+```{r}
+boruta.df <- attStats(boruta.train)
+class(boruta.df)
+print(boruta.df)
+#starwars %>% filter(mass > mean(mass, na.rm = TRUE))
+boruta.df %>% filter(decision != 'Rejected') %>% arrange(desc(meanImp))
+
+```
+
+now that we have the selected features, let's use random forest
+```{r}
+#train_data =cardiac_lim_data[picked,]
+#test_data =cardiac_lim_data[-picked,]
+selected.attributes <- getSelectedAttributes(final.boruta, withTentative = F)
+main_rf_classifier = randomForest(as.factor(MuscleSkeletalLim) ~ X75HRSlope+X75VO2Slope+LowestRER+PeakRER	+PeakVE+LowestVE+LowestVCO2+PeakVCO2+StdO2Pulse+X75VCO2Slope+PeakRR+MeanVCO2+LowestRR+MinHeartRate+PeakHeartRate+MeanRER+X75VESlope+MeanVE+PeakVO2+MeanO2Pulse+PeakVO2Real+LowestVO2+DiffPeakVO2+MeanVO2+MeanHeartRate, data=ms_train_data, ntree=500, mtry=2, importance=TRUE,classwt=c(40,100), keep.inbag=TRUE,replace=FALSE)
+print(main_rf_classifier)
+```
+
+On the test dataset
+```{r}
+prediction_for_table<-predict(main_rf_classifier,ms_test_data)
+table(observed=ms_test_data$MuscleSkeletalLim,predicted=prediction_for_table)
+```
+```{r}
+boruta.df <- attStats(final.boruta)
+class(boruta.df)
+print(boruta.df)
+#starwars %>% filter(mass > mean(mass, na.rm = TRUE))
+boruta.df %>% filter(decision != 'Rejected') %>% arrange(desc(meanImp))
+
+```
+
+
+
+Doing the test with the new dataset
+
+Load the data 
+```{r}
+source_CPET_2 <- read.csv("C:/Users/julio/Projects/HealthInformatics/health-informatics-capstone/jp-post-capstone/DigitalDataEnriched_updated.csv", header=TRUE, sep=",")
+source_CPET_2 <-source_CPET_2 %>% select(-c(X, PatientId,SessionId , sex, age,BMI))
+names(source_CPET_2)
+```
+Finding more data
+Scaling the data
+```{r}
+source_CPET_2$PrimaryCondition <- source_CPET_2$PrimaryCardiacLim*4 + source_CPET_2$PrimaryPulmonaryLim*3 + source_CPET_2$OtherPrimaryLim*2+source_CPET_2$Healthy
+source_CPET_2$PrimaryCondition <- as.factor(source_CPET_2$PrimaryCondition)
+#dat2 <- source_CPET %>% mutate_at(-c("CardiacLim ", "PulmonaryLim","MuscleSkeletalLim"), ~(scale(.) %>% as.vector))
+data_scaled <- source_CPET_2 %>% mutate_at(c("MaxVO2_EST","PeakHeartRate","MeanHeartRate","MinHeartRate","StdHeartRate","LowestVE.VCO2","PeakVE.VCO2","MeanVE.VCO2","StdVE.VCO2","PeakVO2Real","DiffPeakVO2","MeanRER","PeakRER","LowestRER","MeanVE","PeakVE","LowestVE","MeanRR","PeakRR","LowestRR","MeanVO2","PeakVO2","LowestVO2","HRvsVO2Slope","VEvsVCO2Slope","MeanO2Pulse","MaxO2Pulse","MinO2Pulse","StdO2Pulse","X75VO2Slope","X75HRSlope","X75VCO2Slope","X75VESlope","X75RERSlope","X75RRSlope","X75O2Slope","VO2atVT","VO2vsPeakVO2atVT","MeanVCO2","PeakVCO2","LowestVCO2"), ~(scale(.) %>% as.vector))
+```
+Selecting the cardiac limitation data with the random split
+```{r}
+lim_data <-data_scaled %>% select(-c(PrimaryPulmonaryLim,PrimaryCardiacLim,OtherPrimaryLim,Healthy))
+sample_size = floor(0.8*nrow(lim_data))
+set.seed(2345)
+picked = sample(seq_len(nrow(lim_data)),size = sample_size)
+train_data =lim_data[picked,]
+test_data =lim_data[-picked,]
+```
+
+Using boruta in a single multilabel category
+```{r}
+boruta.train <- Boruta(PrimaryCondition~., data = train_data, doTrace = 2)
+```
+
+```{r}
+boruta.train
+```
+
+```{r}
+plot(boruta.train, xlab = "", xaxt = "n", type='l')
+lz<-lapply(1:ncol(boruta.train$ImpHistory),function(i)
+boruta.train$ImpHistory[is.finite(boruta.train$ImpHistory[,i]),i])
+names(lz) <- colnames(boruta.train$ImpHistory)
+Labels <- sort(sapply(lz,median))
+axis(side = 1,las=2,labels = names(Labels),
+at = 1:ncol(boruta.train$ImpHistory), cex.axis = 0.5)
+#text(cex = 0.9)
+#text(x = 1:length(boruta.train), y = par("usr")[3] - 2.5, labels = names(Labels), srt = 35, cex = 0.8, xpd = NA)
+```
+
+Picking tentative features into important features
+```{r}
+final.boruta <- TentativeRoughFix(boruta.train)
+print(final.boruta)
+getSelectedAttributes(final.boruta, withTentative = F)
+```
+
+
+```{r}
+boruta.df <- attStats(final.boruta)
+class(boruta.df)
+print(boruta.df)
+#starwars %>% filter(mass > mean(mass, na.rm = TRUE))
+boruta.df %>% filter(decision == 'Rejected') %>% arrange(desc(meanImp))
+
+```
+
+```{r}
+cond_rf_classifier = randomForest(PrimaryCondition ~. -MeanVE-LowestRER-PeakVE.VCO2-PeakRER-MinO2Pulse-MeanRR-VO2vsPeakVO2atVT-MaxVO2_EST-HRvsVO2Slope-HRvsVO2Slope-HasAnaerobicThresholdMean-Observation	, data=train_data, ntree=500, mtry=2, importance=TRUE,keep.inbag=TRUE,replace=FALSE)
+prediction_for_table<-predict(cond_rf_classifier,test_data)
+table(observed=test_data$PrimaryCondition,predicted=prediction_for_table)
+```
+
+
+
+```{r}
+library(MASS)
+# Fit the model
+train_data$PrimaryCondition <- train_data$PrimaryCondition +1
+
+model <- lda(PrimaryCondition~MeanHeartRate+PeakVO2Real+DiffPeakVO2+PeakRER+MeanVO2+PeakVO2+LowestVO2+HRvsVO2Slope+MeanO2Pulse+StdO2Pulse+X75VO2Slope+X75HRSlope+X75VCO2Slope+X75VESlope+X75RERSlope+X75RRSlope+X75O2Slope  , data = train_data)
+# Make predictions
+predictions <- model %>% predict(test_data)
+# Model accuracy
+mean(predictions$class==test_data$PrimaryCondition)
+```
+
+```{r}
+library(MASS)
+model <- lda(PrimaryCondition~~MeanHeartRate+PeakVO2Real+DiffPeakVO2+PeakRER+MeanVO2+PeakVO2+LowestVO2+HRvsVO2Slope+MeanO2Pulse+StdO2Pulse+X75VO2Slope+X75HRSlope+X75VCO2Slope+X75VESlope+X75RERSlope+X75RRSlope+X75O2Slope , data = train_data)
+model
+```
+
+
+
+
+
+
